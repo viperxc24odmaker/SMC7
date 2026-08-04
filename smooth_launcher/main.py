@@ -23,6 +23,20 @@ from .panels import (FriendsPreviewPanel, GradientHeader, NewsPanel,
 from .theme import COLORS, stylesheet
 from .widgets import Avatar, ToggleSwitch
 
+# Loader id <-> pretty label. Single place to add loaders in the UI.
+LOADER_LABELS = {
+    "fabric": "Fabric",
+    "forge": "Forge",
+    "neoforge": "NeoForge",
+    "quilt": "Quilt",
+    "vanilla": "Vanilla",
+}
+LABEL_TO_LOADER = {v: k for k, v in LOADER_LABELS.items()}
+
+
+def _loader_label(loader_id: str) -> str:
+    return LOADER_LABELS.get((loader_id or "fabric"), "Fabric")
+
 # QtWebEngine is deliberately NOT used: it bundles all of Chromium (~150MB).
 # Microsoft login uses the system browser + a tiny localhost callback instead.
 HAS_WEBENGINE = False
@@ -367,9 +381,8 @@ class PlayPage(QWidget):
         lbox.setSpacing(6)
         lbox.addWidget(_label("LOADER", "SectionLabel"))
         self.loader_combo = QComboBox()
-        self.loader_combo.addItems(["Fabric", "Vanilla"])
-        self.loader_combo.setCurrentText(
-            "Fabric" if self.config.get("loader") == "fabric" else "Vanilla")
+        self.loader_combo.addItems(["Fabric", "Forge", "NeoForge", "Quilt", "Vanilla"])
+        self.loader_combo.setCurrentText(_loader_label(self.config.get("loader")))
         self.loader_combo.currentTextChanged.connect(self._loader_changed)
         lbox.addWidget(self.loader_combo)
         row.addLayout(lbox, 1)
@@ -385,6 +398,10 @@ class PlayPage(QWidget):
         self.instance_combo.setIconSize(QSize(22, 22))
         self.instance_combo.currentIndexChanged.connect(self._instance_changed)
         ibox.addWidget(self.instance_combo)
+        new_inst_btn = QPushButton("+  New instance")
+        new_inst_btn.setObjectName("Ghost")
+        new_inst_btn.clicked.connect(self._new_instance)
+        ibox.addWidget(new_inst_btn)
         cl.addLayout(ibox)
         self._instance_icon_workers = []
         self._suspend_instance_signal = False
@@ -457,10 +474,8 @@ class PlayPage(QWidget):
         self.instance_combo.addItem(self._default_icon(),
                                     "Default (Vanilla / Fabric)", None)
 
-        active_name = None
-        active = self.config.active_profile()
-        if active and self.config.get("game_dir"):
-            active_name = active.get("name")
+        active = self.config.selected_profile()
+        active_name = active.get("name") if active else None
 
         select_index = 0
         for prof in self.config.profiles():
@@ -491,6 +506,72 @@ class PlayPage(QWidget):
         self._instance_icon_workers.append(worker)
         worker.start()
 
+    def _new_instance(self):
+        """Create a fresh custom instance — its own name, version, loader and
+        isolated save folder. This is what lets you keep several builds on the
+        same Minecraft version side by side (e.g. two different 1.8.9s)."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("New instance")
+        dlg.setMinimumWidth(360)
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(10)
+
+        lay.addWidget(QLabel("Instance name"))
+        name_edit = QLineEdit()
+        name_edit.setPlaceholderText("e.g. Casper's PvP")
+        lay.addWidget(name_edit)
+
+        lay.addWidget(QLabel("Minecraft version"))
+        ver_combo = QComboBox()
+        ver_combo.setEditable(True)
+        for i in range(self.version_combo.count()):
+            t = self.version_combo.itemText(i)
+            if t and "Loading" not in t:
+                ver_combo.addItem(t)
+        cur = self.config.get("version")
+        if cur:
+            idx = ver_combo.findText(cur)
+            ver_combo.setCurrentIndex(idx) if idx >= 0 else ver_combo.setEditText(cur)
+        lay.addWidget(ver_combo)
+
+        lay.addWidget(QLabel("Loader"))
+        loader_combo = QComboBox()
+        loader_combo.addItems(["Fabric", "Forge", "NeoForge", "Quilt", "Vanilla"])
+        lay.addWidget(loader_combo)
+
+        btns = QHBoxLayout()
+        cancel_btn = QPushButton("Cancel")
+        create_btn = QPushButton("Create")
+        create_btn.setObjectName("Primary")
+        btns.addWidget(cancel_btn)
+        btns.addWidget(create_btn)
+        lay.addLayout(btns)
+        cancel_btn.clicked.connect(dlg.reject)
+        create_btn.clicked.connect(dlg.accept)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        name = name_edit.text().strip()
+        version = ver_combo.currentText().strip()
+        loader = LABEL_TO_LOADER.get(loader_combo.currentText(), "fabric")
+        if not name or not version:
+            QMessageBox.warning(self, "New instance", "Give it a name and a version.")
+            return
+        if any(p.get("name") == name for p in self.config.profiles()):
+            QMessageBox.warning(self, "New instance",
+                                "You already have an instance called '%s'." % name)
+            return
+
+        self.config.create_instance(name, version, loader)
+        self.refresh_instances()
+        # jump straight to the instance we just made
+        for i in range(self.instance_combo.count()):
+            d = self.instance_combo.itemData(i)
+            if d and d.get("name") == name:
+                self.instance_combo.setCurrentIndex(i)
+                break
+
     def _instance_changed(self, index):
         if index < 0:
             return
@@ -505,8 +586,7 @@ class PlayPage(QWidget):
             self.config.set("game_dir", "")
 
         self.loader_combo.blockSignals(True)
-        self.loader_combo.setCurrentText(
-            "Fabric" if self.config.get("loader") == "fabric" else "Vanilla")
+        self.loader_combo.setCurrentText(_loader_label(self.config.get("loader")))
         self.loader_combo.blockSignals(False)
 
         v_idx = self.version_combo.findText(self.config.get("version"))
@@ -532,7 +612,14 @@ class PlayPage(QWidget):
             lambda v: self.config.set("version", v))
 
     def _loader_changed(self, text):
-        self.config.set("loader", "fabric" if text == "Fabric" else "vanilla")
+        loader = LABEL_TO_LOADER.get(text, "fabric")
+        self.config.set("loader", loader)
+        # If an instance is selected, store the loader ON that instance too so
+        # it stays correct next time it's launched.
+        prof = self.config.selected_profile()
+        if prof:
+            prof["loader"] = loader
+            self.config.add_or_update_profile(prof)
         self.refresh_tiles()
 
     # -- account -----------------------------------------------------------
@@ -557,8 +644,7 @@ class PlayPage(QWidget):
 
     def refresh_tiles(self):
         self.tile_version.set_value(self.config.get("version") or "--")
-        self.tile_loader.set_value(
-            "Fabric" if self.config.get("loader") == "fabric" else "Vanilla")
+        self.tile_loader.set_value(_loader_label(self.config.get("loader")))
         ram = int(self.config.get("ram_mb", 2048))
         self.tile_ram.set_value("%.1f GB" % (ram / 1024))
         self.tile_launches.set_value(str(self.config.get("launch_count", 0)))
