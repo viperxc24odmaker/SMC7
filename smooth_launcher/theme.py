@@ -44,7 +44,8 @@ def stylesheet() -> str:
 
     /* ── Sidebar ─────────────────────────────────────────────── */
     QWidget#Sidebar {{
-        background: {c['surface']};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {c['surface']}, stop:1 {c['bg']});
         border-right: 1px solid {c['border']};
     }}
     QLabel#Logo {{
@@ -90,21 +91,31 @@ def stylesheet() -> str:
 
     /* ── Cards ───────────────────────────────────────────────── */
     QFrame#Card {{
-        background: {c['surface']};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {c['surface']}, stop:1 {c['bg']});
         border: 1px solid {c['border']};
         border-radius: 16px;
     }}
     QFrame#Card2 {{
-        background: {c['surface2']};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {c['surface2']}, stop:1 {c['surface']});
         border: 1px solid {c['border']};
-        border-radius: 12px;
+        border-radius: 13px;
     }}
-    QFrame#Card2:hover {{ border: 1px solid {c['border2']}; }}
+    QFrame#Card2:hover {{
+        border: 1px solid {c['accent2']};
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {c['surface3']}, stop:1 {c['surface2']});
+    }}
 
     QLabel#Title {{
         font-size: 26px; font-weight: 800; letter-spacing: -0.4px;
     }}
     QLabel#Subtitle {{ font-size: 12px; color: {c['muted']}; }}
+    QLabel#CardTitle {{
+        font-size: 15px; font-weight: 700; letter-spacing: -0.2px;
+        color: {c['text']};
+    }}
     QLabel#SectionLabel {{
         font-size: 10px; font-weight: 700; letter-spacing: 1.2px;
         color: {c['faint']};

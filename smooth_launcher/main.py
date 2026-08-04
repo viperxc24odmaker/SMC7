@@ -37,6 +37,68 @@ LABEL_TO_LOADER = {v: k for k, v in LOADER_LABELS.items()}
 def _loader_label(loader_id: str) -> str:
     return LOADER_LABELS.get((loader_id or "fabric"), "Fabric")
 
+
+def prompt_new_instance(parent, config, version_items):
+    """Shared modal for creating a custom instance (name + version + loader).
+    Instances are keyed on NAME, so several can share one version. Returns the
+    new instance name on success, or None if cancelled/invalid."""
+    from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QComboBox, QLabel, QPushButton, QMessageBox
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("New instance")
+    dlg.setMinimumWidth(380)
+    lay = QVBoxLayout(dlg)
+    lay.setContentsMargins(20, 20, 20, 20)
+    lay.setSpacing(10)
+
+    lay.addWidget(QLabel("Instance name"))
+    name_edit = QLineEdit()
+    name_edit.setPlaceholderText("e.g. Casper's PvP")
+    lay.addWidget(name_edit)
+
+    lay.addWidget(QLabel("Minecraft version"))
+    ver_combo = QComboBox()
+    ver_combo.setEditable(True)
+    for t in version_items:
+        if t and "Loading" not in t:
+            ver_combo.addItem(t)
+    cur = config.get("version")
+    if cur:
+        idx = ver_combo.findText(cur)
+        ver_combo.setCurrentIndex(idx) if idx >= 0 else ver_combo.setEditText(cur)
+    lay.addWidget(ver_combo)
+
+    lay.addWidget(QLabel("Loader"))
+    loader_combo = QComboBox()
+    loader_combo.addItems(["Fabric", "Forge", "NeoForge", "Quilt", "Vanilla"])
+    lay.addWidget(loader_combo)
+
+    btns = QHBoxLayout()
+    cancel_btn = QPushButton("Cancel")
+    create_btn = QPushButton("Create")
+    create_btn.setObjectName("Primary")
+    btns.addWidget(cancel_btn)
+    btns.addWidget(create_btn)
+    lay.addLayout(btns)
+    cancel_btn.clicked.connect(dlg.reject)
+    create_btn.clicked.connect(dlg.accept)
+
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+
+    name = name_edit.text().strip()
+    version = ver_combo.currentText().strip()
+    loader = LABEL_TO_LOADER.get(loader_combo.currentText(), "fabric")
+    if not name or not version:
+        QMessageBox.warning(parent, "New instance", "Give it a name and a version.")
+        return None
+    if any(p.get("name") == name for p in config.profiles()):
+        QMessageBox.warning(parent, "New instance",
+                            "You already have an instance called '%s'." % name)
+        return None
+    config.create_instance(name, version, loader)
+    return name
+
 # QtWebEngine is deliberately NOT used: it bundles all of Chromium (~150MB).
 # Microsoft login uses the system browser + a tiny localhost callback instead.
 HAS_WEBENGINE = False
@@ -507,65 +569,15 @@ class PlayPage(QWidget):
         worker.start()
 
     def _new_instance(self):
-        """Create a fresh custom instance — its own name, version, loader and
-        isolated save folder. This is what lets you keep several builds on the
-        same Minecraft version side by side (e.g. two different 1.8.9s)."""
-        dlg = QDialog(self)
-        dlg.setWindowTitle("New instance")
-        dlg.setMinimumWidth(360)
-        lay = QVBoxLayout(dlg)
-        lay.setSpacing(10)
-
-        lay.addWidget(QLabel("Instance name"))
-        name_edit = QLineEdit()
-        name_edit.setPlaceholderText("e.g. Casper's PvP")
-        lay.addWidget(name_edit)
-
-        lay.addWidget(QLabel("Minecraft version"))
-        ver_combo = QComboBox()
-        ver_combo.setEditable(True)
-        for i in range(self.version_combo.count()):
-            t = self.version_combo.itemText(i)
-            if t and "Loading" not in t:
-                ver_combo.addItem(t)
-        cur = self.config.get("version")
-        if cur:
-            idx = ver_combo.findText(cur)
-            ver_combo.setCurrentIndex(idx) if idx >= 0 else ver_combo.setEditText(cur)
-        lay.addWidget(ver_combo)
-
-        lay.addWidget(QLabel("Loader"))
-        loader_combo = QComboBox()
-        loader_combo.addItems(["Fabric", "Forge", "NeoForge", "Quilt", "Vanilla"])
-        lay.addWidget(loader_combo)
-
-        btns = QHBoxLayout()
-        cancel_btn = QPushButton("Cancel")
-        create_btn = QPushButton("Create")
-        create_btn.setObjectName("Primary")
-        btns.addWidget(cancel_btn)
-        btns.addWidget(create_btn)
-        lay.addLayout(btns)
-        cancel_btn.clicked.connect(dlg.reject)
-        create_btn.clicked.connect(dlg.accept)
-
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        """Create a fresh custom instance from the Play page (uses the shared
+        dialog). This lets you keep several builds on the same Minecraft
+        version side by side (e.g. two different 1.8.9s)."""
+        versions = [self.version_combo.itemText(i)
+                    for i in range(self.version_combo.count())]
+        name = prompt_new_instance(self, self.config, versions)
+        if not name:
             return
-
-        name = name_edit.text().strip()
-        version = ver_combo.currentText().strip()
-        loader = LABEL_TO_LOADER.get(loader_combo.currentText(), "fabric")
-        if not name or not version:
-            QMessageBox.warning(self, "New instance", "Give it a name and a version.")
-            return
-        if any(p.get("name") == name for p in self.config.profiles()):
-            QMessageBox.warning(self, "New instance",
-                                "You already have an instance called '%s'." % name)
-            return
-
-        self.config.create_instance(name, version, loader)
         self.refresh_instances()
-        # jump straight to the instance we just made
         for i in range(self.instance_combo.count()):
             d = self.instance_combo.itemData(i)
             if d and d.get("name") == name:
@@ -982,6 +994,131 @@ class SettingsPage(QWidget):
 # Main window
 # --------------------------------------------------------------------------
 
+class InstancesPage(QWidget):
+    """A dedicated page for managing instances — create new ones, launch any
+    of them, and delete the ones you don't want. Sits under Mods in the nav."""
+
+    def __init__(self, config, play_page, launch_cb):
+        super().__init__()
+        self.config = config
+        self.play_page = play_page
+        self.launch_cb = launch_cb
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(30, 28, 30, 22)
+        root.setSpacing(16)
+
+        self.header = GradientHeader("Instances",
+                                     "Create, launch and manage your setups.")
+        root.addWidget(self.header)
+
+        top = QHBoxLayout()
+        self.count_pill = _label("", "Pill")
+        top.addWidget(self.count_pill)
+        top.addStretch(1)
+        newb = QPushButton("+  New instance")
+        newb.setObjectName("Primary")
+        newb.setFixedHeight(42)
+        newb.setCursor(Qt.CursorShape.PointingHandCursor)
+        newb.clicked.connect(self._new)
+        top.addWidget(newb)
+        root.addLayout(top)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.list_host = QWidget()
+        self.vbox = QVBoxLayout(self.list_host)
+        self.vbox.setSpacing(10)
+        self.vbox.setContentsMargins(0, 0, 0, 0)
+        self.vbox.addStretch(1)
+        self.scroll.setWidget(self.list_host)
+        root.addWidget(self.scroll, 1)
+
+        self.refresh()
+
+    def refresh(self):
+        while self.vbox.count() > 1:
+            item = self.vbox.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        profs = self.config.profiles()
+        self.count_pill.setText("%d INSTANCE%s" % (len(profs), "" if len(profs) == 1 else "S"))
+
+        if not profs:
+            empty = _label("No instances yet — hit \u201cNew instance\u201d to make one.",
+                           "Subtitle")
+            self.vbox.insertWidget(0, empty)
+            return
+
+        active = self.config.selected_profile()
+        active_name = active.get("name") if active else None
+        for prof in profs:
+            self.vbox.insertWidget(self.vbox.count() - 1,
+                                   self._card(prof, prof.get("name") == active_name))
+
+    def _card(self, prof, is_active):
+        card = _card("Card2")
+        h = QHBoxLayout(card)
+        h.setContentsMargins(18, 14, 16, 14)
+        h.setSpacing(12)
+
+        info = QVBoxLayout()
+        info.setSpacing(3)
+        name = _label(prof.get("name", "Instance"), "CardTitle")
+        meta = _label("%s   \u00b7   %s" % (prof.get("version", "?"),
+                                            _loader_label(prof.get("loader"))), "Subtitle")
+        info.addWidget(name)
+        info.addWidget(meta)
+        h.addLayout(info, 1)
+
+        if is_active:
+            h.addWidget(_label("ACTIVE", "Pill"))
+
+        launch = QPushButton("Launch")
+        launch.setObjectName("Secondary")
+        launch.setCursor(Qt.CursorShape.PointingHandCursor)
+        launch.clicked.connect(lambda: self._launch(prof))
+        h.addWidget(launch)
+
+        delete = QPushButton("Delete")
+        delete.setObjectName("Ghost")
+        delete.setCursor(Qt.CursorShape.PointingHandCursor)
+        delete.clicked.connect(lambda: self._delete(prof))
+        h.addWidget(delete)
+
+        return card
+
+    def _launch(self, prof):
+        self.config.set_active_profile(prof["name"])
+        self.play_page.refresh_instances()
+        if self.launch_cb:
+            self.launch_cb()
+
+    def _delete(self, prof):
+        r = QMessageBox.question(
+            self, "Delete instance",
+            "Delete \u201c%s\u201d? It's removed from the launcher (your saved "
+            "files on disk are left alone)." % prof["name"],
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        self.config.remove_profile(prof["name"])
+        self.play_page.refresh_instances()
+        self.refresh()
+
+    def _new(self):
+        versions = [self.play_page.version_combo.itemText(i)
+                    for i in range(self.play_page.version_combo.count())]
+        name = prompt_new_instance(self, self.config, versions)
+        if name:
+            self.play_page.refresh_instances()
+            self.refresh()
+
+
 class MainWindow(QWidget):
     def __init__(self, config):
         super().__init__()
@@ -1042,6 +1179,7 @@ class MainWindow(QWidget):
         self.nav_play = self._nav("  ▶   Play")
         self.nav_acc = self._nav("  ◍   Accounts")
         self.nav_mods = self._nav("  ▣   Mods")
+        self.nav_instances = self._nav("  ◆   Instances")
         self.nav_cos = self._nav("  ✦   Cosmetics")
         self.nav_skins = self._nav("  ◈   Skins")
         self.nav_friends = self._nav("  ●   Friends")
@@ -1049,6 +1187,7 @@ class MainWindow(QWidget):
         sl.addWidget(self.nav_play)
         sl.addWidget(self.nav_acc)
         sl.addWidget(self.nav_mods)
+        sl.addWidget(self.nav_instances)
         sl.addSpacing(10)
         _s3 = QLabel("PROFILE")
         _s3.setObjectName("NavSection")
@@ -1093,6 +1232,8 @@ class MainWindow(QWidget):
         self.skins_page = SkinsPage(self.config)
         self.friends_page = FriendsPage(self.config)
         self.settings_page = SettingsPage(self.config)
+        self.instances_page = InstancesPage(
+            self.config, self.play_page, self._launch_from_instances)
         self.accounts_page.changed.connect(self._accounts_changed)
         self.stack.addWidget(self.play_page)
         self.stack.addWidget(self.accounts_page)
@@ -1101,6 +1242,7 @@ class MainWindow(QWidget):
         self.stack.addWidget(self.skins_page)
         self.stack.addWidget(self.friends_page)
         self.stack.addWidget(self.settings_page)
+        self.stack.addWidget(self.instances_page)  # index 7
 
         right = QWidget()
         rl = QVBoxLayout(right)
@@ -1122,6 +1264,7 @@ class MainWindow(QWidget):
         self.nav_skins.clicked.connect(lambda: self._go(4, self.nav_skins))
         self.nav_friends.clicked.connect(lambda: self._go(5, self.nav_friends))
         self.nav_set.clicked.connect(lambda: self._go(6, self.nav_set))
+        self.nav_instances.clicked.connect(lambda: self._go(7, self.nav_instances))
         self._go(0, self.nav_play)
         self._update_chip()
 
@@ -1227,9 +1370,16 @@ class MainWindow(QWidget):
                 self.mods_page.installed_panel.refresh()
         elif index == 4:
             self.skins_page.refresh_mode()
-        for b in (self.nav_play, self.nav_acc, self.nav_mods,
+        elif index == 7:
+            self.instances_page.refresh()
+        for b in (self.nav_play, self.nav_acc, self.nav_mods, self.nav_instances,
                   self.nav_cos, self.nav_skins, self.nav_friends, self.nav_set):
             b.setChecked(b is active_btn)
+
+    def _launch_from_instances(self):
+        """Called by the Instances page: jump to Play and start the launch."""
+        self._go(0, self.nav_play)
+        self.play_page.on_play()
 
     def _accounts_changed(self):
         self.play_page.refresh_account()
