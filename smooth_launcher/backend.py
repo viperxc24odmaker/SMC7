@@ -234,25 +234,22 @@ class LaunchWorker(QThread):
     def run(self):
         try:
             self._maybe_refresh_token()
-            game_dir = self.config.effective_game_dir()
-            mc_version = self.config.get("version")
-            loader = self.config.get("loader")
+
+            # The SELECTED instance is the single source of truth. Whatever is
+            # highlighted in the instance selector is exactly what launches —
+            # never the last-used global value. This is the fix for
+            # "I picked Casper's but it opened Vulkan Optimized".
+            target = self.config.launch_target()
+            mc_version = target["version"]
+            loader = target["loader"]
+            game_dir = target["game_dir"]
+            self.status.emit("Preparing '%s'..." % target["name"])
             cb = self._callback()
 
             installed_ids = _installed_ids(game_dir)
 
-            # Decide the version id we will actually launch.
-            if loader == "fabric":
-                launch_id = self._ensure_fabric(mc_version, game_dir, cb, installed_ids)
-            else:
-                launch_id = mc_version
-                if launch_id not in installed_ids:
-                    self._require_online("install Minecraft")
-                    self.status.emit("Installing Minecraft %s..." % mc_version)
-                    network.resilient(
-                        mll.install.install_minecraft_version,
-                        mc_version, game_dir, callback=cb, retries=5,
-                    )
+            # One unified path for vanilla / fabric / forge / neoforge / quilt.
+            launch_id = self._ensure_loader(loader, mc_version, game_dir, cb, installed_ids)
 
             if self._cancelled:
                 return
@@ -276,35 +273,86 @@ class LaunchWorker(QThread):
             self.failed.emit(_friendly_error(exc))
 
     # -- helpers -----------------------------------------------------------
-    def _ensure_fabric(self, mc_version, game_dir, cb, installed_ids) -> str:
+    def _ensure_loader(self, loader, mc_version, game_dir, cb, installed_ids) -> str:
+        """Install (if needed) and return the version id to actually launch.
+
+        Handles vanilla plus every modded loader through minecraft-launcher-lib
+        8.0's unified mod_loader interface (fabric / forge / neoforge / quilt),
+        so adding a loader here is a one-liner, not a new code path.
+        """
+        loader = (loader or "vanilla").lower()
+
+        # Plain vanilla — no loader layer at all.
+        if loader in ("", "vanilla"):
+            if mc_version not in installed_ids:
+                self._require_online("install Minecraft")
+                self.status.emit("Installing Minecraft %s..." % mc_version)
+                network.resilient(
+                    mll.install.install_minecraft_version,
+                    mc_version, game_dir, callback=cb, retries=5,
+                )
+            return mc_version
+
+        # Modded loaders via the unified interface.
+        try:
+            ml = mll.mod_loader.get_mod_loader(loader)
+        except Exception:
+            ml = mll.mod_loader.get_mod_loader("fabric")  # never let Play die
+
+        java = self.config.get("java_path") or None
+
+        # Pick the loader build for this Minecraft version.
         loader_ver = None
         try:
-            loader_ver = network.resilient(mll.fabric.get_latest_loader_version)
+            vers = network.resilient(lambda: ml.get_loader_versions(mc_version, False))
+            # FLAG: assuming get_loader_versions is newest-first. If an old build
+            # gets picked at runtime, switch this to vers[-1].
+            loader_ver = vers[0] if vers else None
         except Exception:
             loader_ver = None
 
+        # Already installed? Reuse it — no network needed for offline launch.
         if loader_ver:
-            fabric_id = "fabric-loader-%s-%s" % (loader_ver, mc_version)
-            if fabric_id in installed_ids:
-                return fabric_id
+            try:
+                existing = ml.get_installed_version(mc_version, loader_ver)
+                if existing in installed_ids:
+                    return existing
+            except Exception:
+                pass
 
-        # need network to install
-        self._require_online("install Fabric")
+        # Fresh install.
+        self._require_online("install %s" % ml.get_name())
+        if loader_ver is None:
+            raise RuntimeError(
+                "Couldn't find a %s build for Minecraft %s." % (ml.get_name(), mc_version)
+            )
         self.status.emit("Installing Minecraft %s..." % mc_version)
         network.resilient(
             mll.install.install_minecraft_version,
             mc_version, game_dir, callback=cb, retries=5,
         )
-        self.status.emit("Installing Fabric loader...")
+        self.status.emit("Installing %s %s..." % (ml.get_name(), loader_ver))
+        # FLAG: mll 8.0 .install signature is (mc_version, dir, callback, java,
+        # loader_version) — passing java=None lets the lib auto-detect.
         network.resilient(
-            mll.fabric.install_fabric,
-            mc_version, game_dir, loader_version=loader_ver, callback=cb, retries=5,
+            lambda: ml.install(mc_version, game_dir, cb, java, loader_ver),
+            retries=5,
         )
-        # re-detect the freshly installed fabric id
+
+        # Re-detect the freshly installed loader version id.
+        try:
+            fresh = ml.get_installed_version(mc_version, loader_ver)
+            if fresh:
+                return fresh
+        except Exception:
+            pass
         for vid in _installed_ids(game_dir):
-            if vid.startswith("fabric-loader-") and vid.endswith("-" + mc_version):
+            low = vid.lower()
+            if loader in low and mc_version in vid:
                 return vid
-        raise RuntimeError("Fabric installed but its version id couldn't be found.")
+        raise RuntimeError(
+            "%s installed but its version id couldn't be found." % ml.get_name()
+        )
 
     def _build_options(self, game_dir) -> dict:
         ram = int(self.config.get("ram_mb", 2048))
