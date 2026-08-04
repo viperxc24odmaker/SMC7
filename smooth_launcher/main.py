@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import (QApplication, QComboBox, QGraphicsDropShadowEffect,
 
 from . import backend, network
 from .mods import ModsPage, IconWorker, fade_in
-from .modpacks import ModpacksPage
 from .optimiser import OptimiserDialog
 from .pages import CosmeticsPage, FriendsPage, SkinsPage
 from .config import Config
@@ -957,7 +956,6 @@ class MainWindow(QWidget):
         self.nav_play = self._nav("  ▶   Play")
         self.nav_acc = self._nav("  ◍   Accounts")
         self.nav_mods = self._nav("  ▣   Mods")
-        self.nav_packs = self._nav("  ▤   Modpacks")
         self.nav_cos = self._nav("  ✦   Cosmetics")
         self.nav_skins = self._nav("  ◈   Skins")
         self.nav_friends = self._nav("  ●   Friends")
@@ -965,7 +963,6 @@ class MainWindow(QWidget):
         sl.addWidget(self.nav_play)
         sl.addWidget(self.nav_acc)
         sl.addWidget(self.nav_mods)
-        sl.addWidget(self.nav_packs)
         sl.addSpacing(10)
         _s3 = QLabel("PROFILE")
         _s3.setObjectName("NavSection")
@@ -1006,7 +1003,6 @@ class MainWindow(QWidget):
         self.play_page = PlayPage(self.config, self.config.active)
         self.accounts_page = AccountsPage(self.config)
         self.mods_page = ModsPage(self.config)
-        self.packs_page = ModpacksPage(self.config)
         self.cos_page = CosmeticsPage(self.config)
         self.skins_page = SkinsPage(self.config)
         self.friends_page = FriendsPage(self.config)
@@ -1015,7 +1011,6 @@ class MainWindow(QWidget):
         self.stack.addWidget(self.play_page)
         self.stack.addWidget(self.accounts_page)
         self.stack.addWidget(self.mods_page)
-        self.stack.addWidget(self.packs_page)
         self.stack.addWidget(self.cos_page)
         self.stack.addWidget(self.skins_page)
         self.stack.addWidget(self.friends_page)
@@ -1037,11 +1032,10 @@ class MainWindow(QWidget):
         self.nav_play.clicked.connect(lambda: self._go(0, self.nav_play))
         self.nav_acc.clicked.connect(lambda: self._go(1, self.nav_acc))
         self.nav_mods.clicked.connect(lambda: self._go(2, self.nav_mods))
-        self.nav_packs.clicked.connect(lambda: self._go(3, self.nav_packs))
-        self.nav_cos.clicked.connect(lambda: self._go(4, self.nav_cos))
-        self.nav_skins.clicked.connect(lambda: self._go(5, self.nav_skins))
-        self.nav_friends.clicked.connect(lambda: self._go(6, self.nav_friends))
-        self.nav_set.clicked.connect(lambda: self._go(7, self.nav_set))
+        self.nav_cos.clicked.connect(lambda: self._go(3, self.nav_cos))
+        self.nav_skins.clicked.connect(lambda: self._go(4, self.nav_skins))
+        self.nav_friends.clicked.connect(lambda: self._go(5, self.nav_friends))
+        self.nav_set.clicked.connect(lambda: self._go(6, self.nav_set))
         self._go(0, self.nav_play)
         self._update_chip()
 
@@ -1143,9 +1137,11 @@ class MainWindow(QWidget):
             self.play_page.friends_panel.refresh()
         elif index == 2:
             self.mods_page.refresh_sub()
-        elif index == 5:
+            if self.mods_page.stack.currentIndex() == 1:
+                self.mods_page.installed_panel.refresh()
+        elif index == 4:
             self.skins_page.refresh_mode()
-        for b in (self.nav_play, self.nav_acc, self.nav_mods, self.nav_packs,
+        for b in (self.nav_play, self.nav_acc, self.nav_mods,
                   self.nav_cos, self.nav_skins, self.nav_friends, self.nav_set):
             b.setChecked(b is active_btn)
 
