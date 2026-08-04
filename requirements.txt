@@ -1,0 +1,4 @@
+minecraft-launcher-lib==8.0
+# PyQt6 only — no WebEngine (that bundled ~150MB of Chromium).
+PyQt6>=6.9,<6.12
+requests>=2.31.0
