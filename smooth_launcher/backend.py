@@ -199,7 +199,7 @@ def ensure_authlib_injector(cache_dir) -> str | None:
 # --------------------------------------------------------------------------
 
 class LaunchWorker(QThread):
-    """Installs the requested version (and Fabric if needed) then launches.
+    """Installs the requested version (and the loader if needed) then launches.
 
     Signals:
         status(str)    - human readable step
@@ -332,12 +332,43 @@ class LaunchWorker(QThread):
             mc_version, game_dir, callback=cb, retries=5,
         )
         self.status.emit("Installing %s %s..." % (ml.get_name(), loader_ver))
-        # FLAG: mll 8.0 .install signature is (mc_version, dir, callback, java,
-        # loader_version) — passing java=None lets the lib auto-detect.
-        network.resilient(
-            lambda: ml.install(mc_version, game_dir, cb, java, loader_ver),
-            retries=5,
-        )
+        # minecraft-launcher-lib builds differ in what install() accepts (some
+        # take java/loader_version, some only mc/dir/callback). Pass args by
+        # NAME and send only what THIS build's signature actually has, with a
+        # positional fallback — so it never crashes with "takes N positional
+        # arguments but M were given" across versions.
+        import inspect
+        try:
+            _params = inspect.signature(ml.install).parameters
+        except (TypeError, ValueError):
+            _params = {}
+        _available = {
+            "minecraft_version": mc_version,
+            "minecraft_directory": game_dir,
+            "callback": cb,
+            "java": java,
+            "loader_version": loader_ver,
+        }
+        _kwargs = {k: v for k, v in _available.items() if k in _params}
+
+        def _do_install():
+            try:
+                return ml.install(**_kwargs) if _kwargs else ml.install(
+                    mc_version, game_dir, cb)
+            except TypeError:
+                # signature/name drift — fall back to the minimal call shapes
+                for attempt in (
+                    lambda: ml.install(mc_version, game_dir, cb, loader_ver),
+                    lambda: ml.install(mc_version, game_dir, cb),
+                    lambda: ml.install(mc_version, game_dir),
+                ):
+                    try:
+                        return attempt()
+                    except TypeError:
+                        continue
+                raise
+
+        network.resilient(_do_install, retries=5)
 
         # Re-detect the freshly installed loader version id.
         try:
