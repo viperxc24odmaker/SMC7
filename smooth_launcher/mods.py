@@ -8,13 +8,20 @@ from pathlib import Path
 from PyQt6.QtCore import (QEasingCurve, QPropertyAnimation, Qt, QThread,
                           pyqtSignal)
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import (QFileDialog, QFrame, QGraphicsOpacityEffect,
+from PyQt6.QtWidgets import (QComboBox, QFileDialog, QFrame, QGraphicsOpacityEffect,
                              QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                              QProgressBar, QPushButton, QScrollArea,
                              QStackedWidget, QVBoxLayout, QWidget)
 
 from . import network
 from .theme import COLORS
+
+_LOADER_NAMES = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge",
+                 "quilt": "Quilt", "vanilla": "Vanilla"}
+
+
+def _loader_name(x):
+    return _LOADER_NAMES.get((x or "").lower(), (x or "Fabric").title())
 
 API = "https://api.modrinth.com/v2"
 ICON_SIZE = 40
@@ -106,15 +113,20 @@ class SearchWorker(QThread):
     results = pyqtSignal(list)
     failed = pyqtSignal(str)
 
-    def __init__(self, query: str, mc_version: str, loader: str):
+    def __init__(self, query: str, mc_version: str, loader: str, category: str = ""):
         super().__init__()
         self.query = query
         self.mc_version = mc_version
         self.loader = loader
+        self.category = category
 
     def run(self):
-        facets = '[["project_type:mod"],["categories:%s"],["versions:%s"]]' % (
-            self.loader, self.mc_version)
+        groups = ['["project_type:mod"]',
+                  '["categories:%s"]' % self.loader,
+                  '["versions:%s"]' % self.mc_version]
+        if self.category:
+            groups.append('["categories:%s"]' % self.category)
+        facets = "[%s]" % ",".join(groups)
         try:
             r = network.SESSION.get(
                 "%s/search" % API,
@@ -652,6 +664,20 @@ class ModsPage(QWidget):
         self.search.setPlaceholderText("Search mods — sodium, iris, waypoints...")
         self.search.returnPressed.connect(self.do_search)
         bar.addWidget(self.search, 1)
+        self.category_combo = QComboBox()
+        for lbl, val in [("All categories", ""), ("Optimization", "optimization"),
+                         ("Adventure", "adventure"), ("Utility", "utility"),
+                         ("Tech", "technology"), ("Magic", "magic"),
+                         ("Decoration", "decoration"), ("Library", "library"),
+                         ("Storage", "storage"), ("Food", "food"),
+                         ("Mobs", "mobs"), ("Equipment", "equipment"),
+                         ("World Gen", "worldgen"), ("Management", "management"),
+                         ("Social", "social")]:
+            self.category_combo.addItem(lbl, val)
+        self.category_combo.setFixedWidth(150)
+        self.category_combo.currentIndexChanged.connect(
+            lambda _=0: self.do_search() if self.search.text().strip() else None)
+        bar.addWidget(self.category_combo)
         btn = QPushButton("Search")
         btn.setObjectName("Primary")
         btn.clicked.connect(self.do_search)
@@ -741,9 +767,9 @@ class ModsPage(QWidget):
         self._switch_tab(1)
 
     def refresh_sub(self):
-        loader = "Fabric" if self.config.get("loader") == "fabric" else "Vanilla"
+        t = self.config.launch_target()
         self.sub.setText("Installing for %s \u00b7 %s"
-                         % (self.config.get("version"), loader))
+                         % (t["version"], _loader_name(t["loader"])))
 
     def mods_dir(self) -> Path:
         return Path(self.config.effective_game_dir()) / "mods"
@@ -759,14 +785,18 @@ class ModsPage(QWidget):
         q = self.search.text().strip()
         if not q:
             return
-        if self.config.get("loader") != "fabric":
+        t = self.config.launch_target()
+        loader = (t["loader"] or "").lower()
+        if loader in ("", "vanilla"):
             self.status.setText(
-                "Switch the loader to Fabric on the Play page to install mods.")
+                "This instance has no mod loader — pick an instance using Fabric, "
+                "Forge, NeoForge or Quilt to install mods.")
             return
         self.refresh_sub()
         self._clear()
         self.status.setText("Searching...")
-        self.worker = SearchWorker(q, self.config.get("version"), "fabric")
+        category = self.category_combo.currentData() or ""
+        self.worker = SearchWorker(q, t["version"], loader, category)
         self.worker.results.connect(self._show)
         self.worker.failed.connect(self.status.setText)
         self.worker.start()
@@ -784,10 +814,11 @@ class ModsPage(QWidget):
             fade_in(card, 200, delay=i * 35)   # staggered reveal
 
     def _install(self, card: ModCard):
+        t = self.config.launch_target()
         w = InstallWorker(card.hit.get("project_id", ""),
                           card.hit.get("title", "mod"),
                           self.mods_dir(),
-                          self.config.get("version"), "fabric")
+                          t["version"], (t["loader"] or "fabric").lower())
         w.progress.connect(card.set_progress)
         w.done.connect(lambda name, c=card: (c.set_done(True),
                                              self.status.setText("Installed %s" % name)))

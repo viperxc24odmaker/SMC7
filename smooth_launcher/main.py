@@ -372,7 +372,7 @@ class PlayPage(QWidget):
         outer.setContentsMargins(26, 22, 26, 18)
         outer.setSpacing(14)
 
-        self.header = GradientHeader("Ready to play", "Pick a version and jump in.")
+        self.header = GradientHeader("Ready to play", "Pick an instance and jump in.")
         outer.addWidget(self.header)
 
         cols = QHBoxLayout()
@@ -426,30 +426,17 @@ class PlayPage(QWidget):
         cl.setContentsMargins(24, 24, 24, 24)
         cl.setSpacing(16)
 
-        # version + loader row
-        row = QHBoxLayout()
-        row.setSpacing(14)
-
-        vbox = QVBoxLayout()
-        vbox.setSpacing(6)
-        vbox.addWidget(_label("VERSION", "SectionLabel"))
+        # Version + loader are driven entirely by the selected INSTANCE now, so
+        # there are no manual pickers here. We keep the combo objects alive but
+        # hidden — the versions list still loads into version_combo and feeds
+        # the "New instance" dialog; nothing is shown to the user.
         self.version_combo = QComboBox()
         self.version_combo.addItem("Loading versions...")
         self.version_combo.setEnabled(False)
-        vbox.addWidget(self.version_combo)
-        row.addLayout(vbox, 2)
-
-        lbox = QVBoxLayout()
-        lbox.setSpacing(6)
-        lbox.addWidget(_label("LOADER", "SectionLabel"))
+        self.version_combo.hide()
         self.loader_combo = QComboBox()
         self.loader_combo.addItems(["Fabric", "Forge", "NeoForge", "Quilt", "Vanilla"])
-        self.loader_combo.setCurrentText(_loader_label(self.config.get("loader")))
-        self.loader_combo.currentTextChanged.connect(self._loader_changed)
-        lbox.addWidget(self.loader_combo)
-        row.addLayout(lbox, 1)
-
-        cl.addLayout(row)
+        self.loader_combo.hide()
 
         # instance selector — Lunar-style: base Minecraft or any modpack,
         # each with its own icon, version, loader and save data.
@@ -655,8 +642,9 @@ class PlayPage(QWidget):
         self.refresh_tiles()
 
     def refresh_tiles(self):
-        self.tile_version.set_value(self.config.get("version") or "--")
-        self.tile_loader.set_value(_loader_label(self.config.get("loader")))
+        t = self.config.launch_target()
+        self.tile_version.set_value(t["version"] or "--")
+        self.tile_loader.set_value(_loader_label(t["loader"]))
         ram = int(self.config.get("ram_mb", 2048))
         self.tile_ram.set_value("%.1f GB" % (ram / 1024))
         self.tile_launches.set_value(str(self.config.get("launch_count", 0)))
@@ -1176,14 +1164,14 @@ class MainWindow(QWidget):
         _s1.hide()
         sl.addWidget(_s1)
 
-        self.nav_play = self._nav("  ▶   Play")
-        self.nav_acc = self._nav("  ◍   Accounts")
-        self.nav_mods = self._nav("  ▣   Mods")
-        self.nav_instances = self._nav("  ◆   Instances")
-        self.nav_cos = self._nav("  ✦   Cosmetics")
-        self.nav_skins = self._nav("  ◈   Skins")
-        self.nav_friends = self._nav("  ●   Friends")
-        self.nav_set = self._nav("  ⚙   Settings")
+        self.nav_play = self._nav("  🎮   Play")
+        self.nav_acc = self._nav("  👤   Accounts")
+        self.nav_mods = self._nav("  🧩   Mods")
+        self.nav_instances = self._nav("  📦   Instances")
+        self.nav_cos = self._nav("  ✨   Cosmetics")
+        self.nav_skins = self._nav("  🎭   Skins")
+        self.nav_friends = self._nav("  👥   Friends")
+        self.nav_set = self._nav("  ⚙️   Settings")
         sl.addWidget(self.nav_play)
         sl.addWidget(self.nav_acc)
         sl.addWidget(self.nav_mods)

@@ -199,7 +199,7 @@ def ensure_authlib_injector(cache_dir) -> str | None:
 # --------------------------------------------------------------------------
 
 class LaunchWorker(QThread):
-    """Installs the requested version (and the loader if needed) then launches.
+    """Installs the requested version (and Fabric if needed) then launches.
 
     Signals:
         status(str)    - human readable step
