@@ -169,6 +169,51 @@ class Config:
         profs = self.data.get("profiles", [])
         return profs[0] if profs else None
 
+    def selected_profile(self) -> dict | None:
+        """The instance the user has EXPLICITLY selected, or None for the
+        Default (vanilla/fabric) entry. Unlike active_profile(), this never
+        falls back to the first profile — Default must stay Default. This is
+        what the launcher trusts when deciding what to actually launch."""
+        name = self.data.get("active_profile")
+        if not name:
+            return None
+        for p in self.data.get("profiles", []):
+            if p.get("name") == name:
+                return p
+        return None
+
+    def launch_target(self) -> dict:
+        """Resolve exactly what Play should launch. The selected instance wins
+        every time; only when no instance is chosen (Default) do we use the
+        global settings. This is the single source of truth that kills the
+        'it launched the last-used one instead of the one I picked' bug."""
+        prof = self.selected_profile()
+        if prof:
+            return {
+                "name": prof.get("name", "Instance"),
+                "version": prof.get("version") or self.get("version"),
+                "loader": (prof.get("loader") or "fabric"),
+                "game_dir": prof.get("game_dir") or self.effective_game_dir(),
+            }
+        return {
+            "name": "Default",
+            "version": self.get("version"),
+            "loader": (self.get("loader") or "vanilla"),
+            "game_dir": self.effective_game_dir(),
+        }
+
+    def create_instance(self, name: str, version: str, loader: str = "fabric",
+                        icon_url: str = "") -> dict:
+        """Create a brand-new custom instance. Instances are keyed on NAME, so
+        you can have several on the same Minecraft version (e.g. two 1.8.9
+        builds with different names) — each gets its own isolated game folder
+        under instances/<name>/. Returns the created profile dict."""
+        prof = {"name": name.strip(), "version": version, "loader": loader}
+        if icon_url:
+            prof["icon_url"] = icon_url
+        self.add_or_update_profile(prof)  # auto-creates its own game_dir
+        return prof
+
     # ---- accounts --------------------------------------------------------
     def accounts(self) -> list:
         return list(self.data.get("accounts", []))
