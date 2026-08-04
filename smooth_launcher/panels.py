@@ -49,8 +49,8 @@ class GradientHeader(QWidget):
 
         # drifting blooms
         for i, (col, sx, sy, rad) in enumerate([
-            (QColor(108, 92, 231, 150), 0.28, 0.35, 0.85),
-            (QColor(167, 139, 250, 105), 0.72, 0.60, 0.70),
+            (QColor(47, 124, 246, 150), 0.28, 0.35, 0.85),
+            (QColor(126, 194, 255, 105), 0.72, 0.60, 0.70),
         ]):
             cx = w * (sx + 0.10 * math.sin(self._t + i * 2.1))
             cy = h * (sy + 0.28 * math.cos(self._t * 0.8 + i))
