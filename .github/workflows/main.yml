@@ -1,0 +1,53 @@
+name: Build Smooth Client Launcher (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller==6.11.1
+
+      - name: Install UPX (shrinks the exe)
+        run: choco install upx -y
+
+      - name: Build with PyInstaller (spec file — trims unused Qt modules)
+        run: pyinstaller smooth_launcher.spec --noconfirm --clean
+
+      - name: Report exe size
+        shell: pwsh
+        run: |
+          $exe = Get-Item "dist/SmoothClientLauncher.exe"
+          $mb = [math]::Round($exe.Length / 1MB, 2)
+          Write-Host "SmoothClientLauncher.exe size: $mb MB"
+          if ($mb -gt 50) {
+            Write-Warning "Over 50MB target ($mb MB) - trim EXCLUDE_MODULES more in smooth_launcher.spec"
+          }
+
+      - name: Zip the build
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/SmoothClientLauncher.exe -DestinationPath SmoothClientLauncher-windows.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmoothClientLauncher-windows
+          path: SmoothClientLauncher-windows.zip
+          if-no-files-found: error
