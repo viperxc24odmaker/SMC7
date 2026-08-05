@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
+from PyQt6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
                              QProgressBar, QPushButton, QScrollArea,
                              QVBoxLayout, QWidget)
 
@@ -31,8 +31,10 @@ class PackSearchWorker(QThread):
         self.loader = loader
 
     def run(self):
-        facets = '[["project_type:modpack"],["categories:%s"],["versions:%s"]]' % (
-            self.loader, self.mc_version)
+        groups = ['["project_type:modpack"]', '["versions:%s"]' % self.mc_version]
+        if self.loader:
+            groups.insert(1, '["categories:%s"]' % self.loader)
+        facets = "[%s]" % ",".join(groups)
         try:
             r = network.SESSION.get(
                 "%s/search" % API,
@@ -67,20 +69,23 @@ class PackInstallWorker(QThread):
     def run(self):
         tmp_mrpack = None
         try:
+            params = {"game_versions": '["%s"]' % self.mc_version}
+            if self.loader:
+                params["loaders"] = '["%s"]' % self.loader
             r = network.SESSION.get(
                 "%s/project/%s/version" % (API, self.project_id),
-                params={"game_versions": '["%s"]' % self.mc_version,
-                        "loaders": '["%s"]' % self.loader},
-                timeout=15)
+                params=params, timeout=15)
             r.raise_for_status()
             versions = r.json()
             if not versions:
                 self.failed.emit(
-                    "%s has no build for %s / %s yet."
-                    % (self.name, self.mc_version, self.loader))
+                    "%s has no build for %s yet." % (self.name, self.mc_version))
                 return
+            chosen = versions[0]
+            # the pack defines its own loader — use it so the instance is correct
+            self.loader = (chosen.get("loaders") or [self.loader or "fabric"])[0]
 
-            files = versions[0].get("files", [])
+            files = chosen.get("files", [])
             primary = next((f for f in files if f.get("primary")), files[0])
             url = primary["url"]
 
@@ -281,6 +286,12 @@ class ModpacksPage(QWidget):
         self.search.setPlaceholderText("Search modpacks — cobblemon, better mc, skyblock...")
         self.search.returnPressed.connect(self.do_search)
         bar.addWidget(self.search, 1)
+        self.loader_filter = QComboBox()
+        for lbl, val in [("All loaders", ""), ("Fabric", "fabric"), ("Forge", "forge"),
+                         ("NeoForge", "neoforge"), ("Quilt", "quilt")]:
+            self.loader_filter.addItem(lbl, val)
+        self.loader_filter.setFixedWidth(130)
+        bar.addWidget(self.loader_filter)
         btn = QPushButton("Search")
         btn.setObjectName("Primary")
         btn.clicked.connect(self.do_search)
@@ -316,14 +327,11 @@ class ModpacksPage(QWidget):
         q = self.search.text().strip()
         if not q:
             return
-        if self.config.get("loader") != "fabric":
-            self.status.setText(
-                "Switch the loader to Fabric on the Play page to browse modpacks.")
-            return
         self._clear()
         self.icon_workers.clear()
         self.status.setText("Searching...")
-        self.worker = PackSearchWorker(q, self.config.get("version"), "fabric")
+        loader = self.loader_filter.currentData() or ""
+        self.worker = PackSearchWorker(q, self.config.get("version"), loader)
         self.worker.results.connect(self._show)
         self.worker.failed.connect(self.status.setText)
         self.worker.start()
@@ -340,10 +348,11 @@ class ModpacksPage(QWidget):
             fade_in(card, 200, delay=i * 35)
 
     def _install(self, card: PackCard):
+        loader = self.loader_filter.currentData() or ""
         w = PackInstallWorker(card.hit.get("project_id", ""),
                               card.hit.get("title", "modpack"),
                               self.instances_dir(),
-                              self.config.get("version"), "fabric",
+                              self.config.get("version"), loader,
                               card.hit.get("icon_url", ""))
         w.progress.connect(card.set_progress)
         w.status.connect(card.set_status)
